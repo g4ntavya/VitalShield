@@ -28,6 +28,14 @@ from vitalshield.config import get_settings
 from vitalshield.fhir.client import FHIRClient
 from vitalshield.privacy.encryption import get_encryptor
 from vitalshield.privacy.zkproof import get_zk_engine
+
+# --- ContextVars for Prompt Opinion FHIR Context ---
+import contextvars
+from typing import Optional
+
+fhir_url_var: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("fhir_url", default=None)
+fhir_token_var: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("fhir_token", default=None)
+# ---------------------------------------------------
 from vitalshield.scoring.scorer import score_patient
 from vitalshield.temporal.timeline import TemporalEngine
 
@@ -67,8 +75,10 @@ async def _full_analysis(
     Returns (patient, temporal_profile, acuity_score, cep_result).
     """
     settings = get_settings()
-    token = access_token or settings.fhir_access_token
-    base_url = fhir_base_url or settings.fhir_base_url
+    
+    # Prioritize Prompt Opinion HTTP headers (contextvars), then explicit args, then settings
+    token = fhir_token_var.get() or access_token or settings.fhir_access_token
+    base_url = fhir_url_var.get() or fhir_base_url or settings.fhir_base_url
 
     # Layer 1: Fetch FHIR data
     client = FHIRClient(base_url=base_url, access_token=token)
@@ -744,9 +754,25 @@ def main():
             )
 
         from starlette.middleware.cors import CORSMiddleware
+        from starlette.middleware.base import BaseHTTPMiddleware
+
+        class FHIRContextMiddleware(BaseHTTPMiddleware):
+            async def dispatch(self, request, call_next):
+                # Starlette headers are case-insensitive, but usually represented lowercase
+                fhir_url = request.headers.get("x-fhir-server-url")
+                fhir_token = request.headers.get("x-fhir-access-token")
+                
+                if fhir_url:
+                    fhir_url_var.set(fhir_url)
+                if fhir_token:
+                    fhir_token_var.set(fhir_token)
+                return await call_next(request)
 
         # Add the health check to the root for Railway
         app.add_route("/", health_check, methods=["GET", "POST"])
+        
+        # Inject Context Middleware to capture Prompt Opinion headers
+        app.add_middleware(FHIRContextMiddleware)
         
         # Inject CORS to prevent 'Unexpected Error' in web-based MCP clients
         app.add_middleware(
