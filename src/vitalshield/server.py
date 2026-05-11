@@ -16,10 +16,8 @@ Tools:
 
 from __future__ import annotations
 
-import asyncio
-import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import structlog
 from fastmcp import FastMCP
@@ -57,11 +55,13 @@ They do not replace clinical judgment. Always verify with the patient's care tea
 
 # ── Shared singletons ──────────────────────────────────────────────────────────
 _fleet = AgentFleet()
-_cep   = CEPEngine()
+_cep = CEPEngine()
 _temporal = TemporalEngine()
 
 
-async def _full_analysis(patient_id: str, access_token: str | None = None, fhir_base_url: str | None = None):
+async def _full_analysis(
+    patient_id: str, access_token: str | None = None, fhir_base_url: str | None = None
+):
     """
     Core pipeline: runs all 8 layers for a given patient_id.
     Returns (patient, temporal_profile, acuity_score, cep_result).
@@ -90,6 +90,7 @@ async def _full_analysis(patient_id: str, access_token: str | None = None, fhir_
 # Tool 1: Full Patient Intelligence
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 @mcp.tool()
 async def get_patient_intelligence(
     patient_id: str,
@@ -99,7 +100,7 @@ async def get_patient_intelligence(
 ) -> dict:
     """
     Full patient intelligence profile.
-    
+
     Runs the complete VitalShield pipeline:
     - Fetches FHIR R4 patient data
     - Normalizes terminology (SNOMED CT + LOINC)
@@ -107,21 +108,23 @@ async def get_patient_intelligence(
     - Runs CEP pattern detection
     - Runs neurosymbolic acuity scoring (0-100)
     - Optionally activates 5-agent Gemini fleet for clinical reasoning
-    
+
     Args:
         patient_id: FHIR Patient resource ID
         access_token: FHIR OAuth 2.0 bearer token (uses config default if empty)
         include_agent_fleet: Run all 5 Gemini agents (slower but richer)
-    
+
     Returns:
         Full patient intelligence dict with score, trajectory, and clinical consensus.
     """
     log.info("get_patient_intelligence", patient_id=patient_id)
-    patient, temporal, score, cep_result = await _full_analysis(patient_id, access_token or None, fhir_base_url or None)
+    patient, temporal, score, cep_result = await _full_analysis(
+        patient_id, access_token or None, fhir_base_url or None
+    )
 
     # Get history acuity for delta
     score_4h_ago_val = 0.0
-    cutoff = datetime.now(timezone.utc) - __import__('datetime').timedelta(hours=4)
+    cutoff = datetime.now(UTC) - __import__("datetime").timedelta(hours=4)
     hist_pat = patient.model_copy(deep=True)
     hist_pat.vitals = [v for v in hist_pat.vitals if v.timestamp <= cutoff]
     if hist_pat.vitals:
@@ -137,8 +140,8 @@ async def get_patient_intelligence(
             "acuity_status": {
                 "overall_score": score.acuity_score,
                 "risk_level": score.risk_level.upper(),
-                "trajectory_delta": delta_str
-            }
+                "trajectory_delta": delta_str,
+            },
         },
         "deterministic_engine": {
             "velocity_vectors": {},
@@ -146,51 +149,60 @@ async def get_patient_intelligence(
                 {
                     "pattern": a.pattern_name,
                     "confidence": f"{min(0.99, 0.40 + (len(a.matched_conditions) / max(a.total_conditions, 1)) * 0.50):.2f}",
-                    "evidence": a.description.split(':')[0]
-                } for a in cep_result.alerts
-            ]
+                    "evidence": a.description.split(":")[0],
+                }
+                for a in cep_result.alerts
+            ],
         },
         "privacy_layer": {
             "computation": "TenSEAL Homomorphically Encrypted (Capable)",
-            "access_verification": f"Zero-Knowledge Proof Verified"
-        }
+            "access_verification": "Zero-Knowledge Proof Verified",
+        },
     }
 
     # Add velocity vectors
     for code, label in [
-        ("8867-4", "heart_rate"), ("8480-6", "systolic_bp"),
-        ("2160-0", "creatinine")
+        ("8867-4", "heart_rate"),
+        ("8480-6", "systolic_bp"),
+        ("2160-0", "creatinine"),
     ]:
         s = temporal.vitals.get(code) or temporal.labs.get(code)
         if s:
             result["deterministic_engine"]["velocity_vectors"][label] = {
                 "current": s.current_value,
                 "rate_per_hr": f"{s.current_rate:+.2f}" if s.current_rate is not None else 0.0,
-                "trend": s.trend if s.trend else "unknown"
+                "trend": s.trend if s.trend else "unknown",
             }
 
     if include_agent_fleet:
         try:
             consensus = await _fleet.run(patient, temporal, score, cep_result)
-            
+
             # Format dissent block
             dissent_block = None
             if consensus.dissent:
                 dissent_block = {
                     "risk_flag": "High Risk of Anchor Bias",
-                    "alternative_diagnosis": " | ".join(consensus.dissent)
+                    "alternative_diagnosis": " | ".join(consensus.dissent),
                 }
 
             result["agent_fleet_intelligence"] = {
                 "agreement_level": consensus.agent_agreement_level,
-                "temporal_context": consensus.temporal_context if hasattr(consensus, "temporal_context") else [],
+                "temporal_context": consensus.temporal_context
+                if hasattr(consensus, "temporal_context")
+                else [],
                 "predictions": consensus.predictions if hasattr(consensus, "predictions") else [],
-                "clinical_pathways_considerations": consensus.clinical_pathways if hasattr(consensus, "clinical_pathways") else consensus.treatment_recommendations,
-                "adversarial_dissent": dissent_block
+                "clinical_pathways_considerations": consensus.clinical_pathways
+                if hasattr(consensus, "clinical_pathways")
+                else consensus.treatment_recommendations,
+                "adversarial_dissent": dissent_block,
             }
         except Exception as e:
             log.error("Agent fleet error", error=str(e))
-            result["agent_fleet_intelligence"] = {"status": "Agent Fleet Unavailable", "error": str(e)}
+            result["agent_fleet_intelligence"] = {
+                "status": "Agent Fleet Unavailable",
+                "error": str(e),
+            }
 
     return result
 
@@ -198,6 +210,7 @@ async def get_patient_intelligence(
 # ──────────────────────────────────────────────────────────────────────────────
 # Tool 2: Acuity Score
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 @mcp.tool()
 async def get_acuity_score(
@@ -207,17 +220,17 @@ async def get_acuity_score(
 ) -> dict:
     """
     Neurosymbolic acuity score (0-100) with full reasoning trace.
-    
+
     Combines:
     - Symbolic: qSOFA + SIRS + NEWS2 clinical rules (max 70 pts)
     - Neural: Isolation Forest anomaly detection on 72hr vital trajectory (max 30 pts)
-    
+
     Faster than get_patient_intelligence (no agent fleet).
-    
+
     Args:
         patient_id: FHIR Patient resource ID
         access_token: FHIR OAuth 2.0 bearer token
-    
+
     Returns:
         Score 0-100, risk level, full reasoning trace showing which rules fired.
     """
@@ -249,6 +262,7 @@ async def get_acuity_score(
 # Tool 3: Temporal Profile
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 @mcp.tool()
 async def get_temporal_profile(
     patient_id: str,
@@ -258,24 +272,26 @@ async def get_temporal_profile(
 ) -> dict:
     """
     72-hour temporal profile with velocity vectors for every vital.
-    
+
     For each vital sign tracked:
     - Full time series (value at each measurement)
     - Rate of change (Δ/Δt in units/hour)
     - Acceleration (Δ²/Δt²)
     - Trend classification: rising / falling / stable / volatile
     - Gap-aware interpolation (marked separately)
-    
+
     Args:
         patient_id: FHIR Patient resource ID
         access_token: FHIR OAuth 2.0 bearer token
         hours: Lookback window in hours (default 72)
-    
+
     Returns:
         Temporal profile dict with time series for all vitals and labs.
     """
     log.info("get_temporal_profile", patient_id=patient_id, hours=hours)
-    _, temporal, _, _ = await _full_analysis(patient_id, access_token or None, fhir_base_url or None)
+    _, temporal, _, _ = await _full_analysis(
+        patient_id, access_token or None, fhir_base_url or None
+    )
 
     def serialize_series(series_dict):
         result = {}
@@ -324,6 +340,7 @@ async def get_temporal_profile(
 # Tool 4: Sepsis Risk
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 @mcp.tool()
 async def get_sepsis_risk(
     patient_id: str,
@@ -333,30 +350,31 @@ async def get_sepsis_risk(
 ) -> dict:
     """
     Dedicated sepsis risk analysis with multi-vital CEP and clinical reasoning.
-    
+
     Uses:
     - Early sepsis CEP pattern (HR rise + MAP drop + temp spike + lactate rising)
     - Septic shock CEP pattern (refractory hypotension + elevated lactate)
     - qSOFA screening criteria
-    - SIRS criteria  
+    - SIRS criteria
     - NEWS2 risk classification
     - (optional) Full 5-agent Gemini fleet including adversarial differential diagnosis
-    
+
     Args:
         patient_id: FHIR Patient resource ID
         access_token: FHIR OAuth 2.0 bearer token
         run_agent_fleet: Run Gemini fleet for deep clinical reasoning
-    
+
     Returns:
         Sepsis risk analysis with probability, criteria, and treatment recommendations.
     """
     log.info("get_sepsis_risk", patient_id=patient_id)
-    patient, temporal, score, cep_result = await _full_analysis(patient_id, access_token or None, fhir_base_url or None)
+    patient, temporal, score, cep_result = await _full_analysis(
+        patient_id, access_token or None, fhir_base_url or None
+    )
 
     # Filter sepsis-specific alerts
     sepsis_alerts = [
-        a for a in cep_result.alerts
-        if a.pattern_name in ("early_sepsis", "septic_shock")
+        a for a in cep_result.alerts if a.pattern_name in ("early_sepsis", "septic_shock")
     ]
 
     result = {
@@ -364,8 +382,10 @@ async def get_sepsis_risk(
         "sepsis_risk_score": cep_result.sepsis_risk_score,
         "sepsis_pattern_matched": cep_result.sepsis_pattern_matched,
         "risk_category": (
-            "HIGH" if cep_result.sepsis_risk_score >= 0.6
-            else "MODERATE" if cep_result.sepsis_risk_score >= 0.3
+            "HIGH"
+            if cep_result.sepsis_risk_score >= 0.6
+            else "MODERATE"
+            if cep_result.sepsis_risk_score >= 0.3
             else "LOW"
         ),
         "qsofa_positive": score.qsofa_positive,
@@ -387,8 +407,10 @@ async def get_sepsis_risk(
 
     # Add key vital values
     for code, label in [
-        ("8867-4", "heart_rate"), ("8480-6", "systolic_bp"),
-        ("8310-5", "temperature"), ("9279-1", "respiratory_rate"),
+        ("8867-4", "heart_rate"),
+        ("8480-6", "systolic_bp"),
+        ("8310-5", "temperature"),
+        ("9279-1", "respiratory_rate"),
         ("59408-5", "spo2"),
     ]:
         s = temporal.vitals.get(code)
@@ -414,7 +436,9 @@ async def get_sepsis_risk(
                 "sepsis_consensus": consensus.sepsis_consensus,
                 "differential_diagnosis": consensus.dissent,
                 "treatment_recommendations": consensus.treatment_recommendations,
-                "literature_support": consensus.literature_support[:500] if consensus.literature_support else "",
+                "literature_support": consensus.literature_support[:500]
+                if consensus.literature_support
+                else "",
                 "full_reasoning_trace": consensus.reasoning_trace,
             }
         except Exception as e:
@@ -427,6 +451,7 @@ async def get_sepsis_risk(
 # Tool 5: Explain Score
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 @mcp.tool()
 async def explain_score(
     patient_id: str,
@@ -435,23 +460,25 @@ async def explain_score(
 ) -> dict:
     """
     Natural language clinical reasoning explanation for the acuity score.
-    
+
     Includes:
     - Full reasoning trace from symbolic clinical rules
     - Neural anomaly detection findings
     - CEP pattern alerts with clinical recommendations
     - Adversarial agent's alternative diagnoses
     - Agent consensus summary
-    
+
     Args:
         patient_id: FHIR Patient resource ID
         access_token: FHIR OAuth 2.0 bearer token
-    
+
     Returns:
         Human-readable clinical reasoning suitable for documentation.
     """
     log.info("explain_score", patient_id=patient_id)
-    patient, temporal, score, cep_result = await _full_analysis(patient_id, access_token or None, fhir_base_url or None)
+    patient, temporal, score, cep_result = await _full_analysis(
+        patient_id, access_token or None, fhir_base_url or None
+    )
 
     # Get agent consensus for full explanation
     consensus = None
@@ -461,9 +488,9 @@ async def explain_score(
         log.warning("Fleet unavailable for explain_score", error=str(e))
 
     explanation_parts = [
-        f"# VitalShield Clinical Intelligence Summary",
+        "# VitalShield Clinical Intelligence Summary",
         f"Patient: {patient.demographics.name} | Score: {score.acuity_score:.0f}/100 ({score.risk_level.upper()})",
-        f"Generated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}",
+        f"Generated: {datetime.now(UTC).strftime('%Y-%m-%d %H:%M UTC')}",
         "",
         "## Neurosymbolic Acuity Score Breakdown",
         score.reasoning_trace,
@@ -475,9 +502,7 @@ async def explain_score(
             "## Critical Pattern Alerts (CEP)",
         ]
         for alert in cep_result.alerts:
-            explanation_parts.append(
-                f"**{alert.severity.upper()}: {alert.pattern_name}**"
-            )
+            explanation_parts.append(f"**{alert.severity.upper()}: {alert.pattern_name}**")
             explanation_parts.append(alert.description)
             explanation_parts.append(f"Recommendation: {alert.recommendation}")
             explanation_parts.append("")
@@ -523,7 +548,11 @@ async def explain_score(
         "structured": {
             "symbolic_reasoning": score.reasoning_trace,
             "cep_alerts": [
-                {"pattern": a.pattern_name, "severity": a.severity, "recommendation": a.recommendation}
+                {
+                    "pattern": a.pattern_name,
+                    "severity": a.severity,
+                    "recommendation": a.recommendation,
+                }
                 for a in cep_result.alerts
             ],
             "agent_consensus": consensus.primary_assessment if consensus else None,
@@ -538,6 +567,7 @@ async def explain_score(
 # Tool 6: Verify Access (ZK Proof)
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 @mcp.tool()
 async def verify_access(
     clinician_id: str,
@@ -547,19 +577,19 @@ async def verify_access(
 ) -> dict:
     """
     Cryptographic access verification via zero-knowledge proof.
-    
+
     Generates and immediately verifies a ZK proof that the clinician
     is authorized to access the patient's data — without creating an
     audit log that itself becomes a privacy liability.
-    
+
     Uses TenSEAL + snarkjs (Groth16) if available, falls back to
     cryptographic commitment (SHA-256 hash chain) for demo mode.
-    
+
     Args:
         clinician_id: Clinician identifier (e.g., NPI number)
         patient_id: Patient ID being accessed
         access_token: Current OAuth bearer token
-    
+
     Returns:
         ZK proof payload and verification result.
     """
@@ -589,6 +619,7 @@ async def verify_access(
 # Tool 7: Subscribe Vitals
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 @mcp.tool()
 async def subscribe_vitals(
     patient_id: str,
@@ -599,33 +630,36 @@ async def subscribe_vitals(
 ) -> dict:
     """
     Subscribe to real-time acuity score updates for a patient.
-    
+
     Fires a webhook POST to `webhook_url` whenever:
     - A CEP pattern alert fires
     - The acuity score crosses the alert_threshold
     - A new sepsis signature is detected
-    
+
     Note: In demo mode, returns a subscription ID but does not actively poll.
     Production mode requires a running VitalShield server with FHIR subscription support.
-    
+
     Args:
         patient_id: FHIR Patient resource ID to monitor
         webhook_url: HTTPS URL to POST alert payloads to
         alert_threshold: Minimum acuity score to trigger webhook (default 60)
-    
+
     Returns:
         Subscription details with ID and current patient status.
     """
     import uuid
+
     log.info("subscribe_vitals", patient_id=patient_id, webhook_url=webhook_url)
 
     # Get current status
     try:
-        _, _, score, cep_result = await _full_analysis(patient_id, access_token or None, fhir_base_url or None)
+        _, _, score, cep_result = await _full_analysis(
+            patient_id, access_token or None, fhir_base_url or None
+        )
         current_score = score.acuity_score
         current_status = score.risk_level
         current_alerts = len(cep_result.alerts)
-    except Exception as e:
+    except Exception:
         current_score = None
         current_status = "unknown"
         current_alerts = 0
@@ -645,42 +679,51 @@ async def subscribe_vitals(
             "Demo mode: subscription registered. "
             "In production, VitalShield polls FHIR every 60s and fires webhook on threshold breach."
         ),
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
     }
 
 
 # ── Entry point ────────────────────────────────────────────────────────────────
 
+
 def main():
     """Run VitalShield MCP server with professional ASGI routing."""
     import os
+
     import uvicorn
+    from mcp.server.sse import SseServerTransport
     from starlette.applications import Starlette
+    from starlette.requests import Request
     from starlette.responses import JSONResponse
     from starlette.routing import Route
-    from starlette.requests import Request
-    from mcp.server.sse import SseServerTransport
 
     port = int(os.getenv("PORT", 8000))
-    
+
     if os.getenv("PORT"):
         log.info("Cloud environment detected, initializing ASGI SSE", port=port)
-        
+
         sse = SseServerTransport("/messages")
 
         async def handle_sse(request: Request):
-            async with sse.connect_sse(request.scope, request.receive, request._send) as (read_stream, write_stream):
-                await mcp._mcp_server.run(read_stream, write_stream, mcp._mcp_server.create_initialization_options())
+            async with sse.connect_sse(request.scope, request.receive, request._send) as (
+                read_stream,
+                write_stream,
+            ):
+                await mcp._mcp_server.run(
+                    read_stream, write_stream, mcp._mcp_server.create_initialization_options()
+                )
 
         async def handle_messages(request: Request):
             await sse.handle_post_message(request.scope, request.receive, request._send)
 
         async def health_check(request: Request):
-            return JSONResponse({
-                "status": "VitalShield Active",
-                "mcp_sse_endpoint": "/sse",
-                "mcp_messages_endpoint": "/messages"
-            })
+            return JSONResponse(
+                {
+                    "status": "VitalShield Active",
+                    "mcp_sse_endpoint": "/sse",
+                    "mcp_messages_endpoint": "/messages",
+                }
+            )
 
         from starlette.middleware import Middleware
         from starlette.middleware.cors import CORSMiddleware
@@ -692,14 +735,15 @@ def main():
                 Route("/messages", endpoint=handle_messages, methods=["POST"]),
             ],
             middleware=[
-                Middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
-            ]
+                Middleware(
+                    CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"]
+                )
+            ],
         )
-        
+
         uvicorn.run(app, host="0.0.0.0", port=port)
     else:
         mcp.run(transport="stdio")
-
 
 
 if __name__ == "__main__":
