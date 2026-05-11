@@ -682,11 +682,17 @@ def main():
                 "mcp_messages_endpoint": "/messages"
             })
 
+        from starlette.middleware import Middleware
+        from starlette.middleware.cors import CORSMiddleware
+
         app = Starlette(
             routes=[
                 Route("/", endpoint=health_check, methods=["GET", "POST"]),
                 Route("/sse", endpoint=handle_sse, methods=["GET", "POST"]),
                 Route("/messages", endpoint=handle_messages, methods=["POST"]),
+            ],
+            middleware=[
+                Middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
             ]
         )
         
