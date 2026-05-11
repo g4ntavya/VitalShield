@@ -652,7 +652,7 @@ async def subscribe_vitals(
 # ── Entry point ────────────────────────────────────────────────────────────────
 
 def main():
-    """Run VitalShield MCP server with bulletproof cloud routing."""
+    """Run VitalShield MCP server with professional ASGI routing."""
     import os
     import uvicorn
     from starlette.applications import Starlette
@@ -663,43 +663,37 @@ def main():
     port = int(os.getenv("PORT", 8000))
     
     if os.getenv("PORT"):
-        log.info("Cloud environment detected, initializing robust SSE", port=port)
+        log.info("Cloud environment detected, initializing ASGI SSE", port=port)
         
-        # Initialize the SSE transport with the explicit message endpoint
         sse = SseServerTransport("/messages")
 
-        async def handle_sse(request):
-            async with sse.connect_sse(request.scope, request.receive, request._send) as (read_stream, write_stream):
+        async def handle_sse(scope, receive, send):
+            async with sse.connect_sse(scope, receive, send) as (read_stream, write_stream):
                 await mcp.server.run(read_stream, write_stream, mcp.server.create_initialization_options())
 
-        async def handle_messages(request):
-            await sse.handle_post_message(request.scope, request.receive, request._send)
+        async def handle_messages(scope, receive, send):
+            await sse.handle_post_message(scope, receive, send)
 
-        async def root_handler(request):
-            # If it's a POST, it might be a platform health check or message
-            if request.method == "POST":
-                return JSONResponse({"status": "Active", "message": "POST received"}, status_code=200)
-            return JSONResponse({
+        async def health_check(scope, receive, send):
+            response = JSONResponse({
                 "status": "VitalShield Active",
                 "mcp_sse_endpoint": "/sse",
                 "mcp_messages_endpoint": "/messages"
             })
+            await response(scope, receive, send)
 
         app = Starlette(
             routes=[
-                # Handle root with both GET and POST for maximum compatibility
-                Route("/", endpoint=root_handler, methods=["GET", "POST"]),
-                # Handle /sse for both to prevent 405s during handshake
+                Route("/", endpoint=health_check, methods=["GET", "POST"]),
                 Route("/sse", endpoint=handle_sse, methods=["GET", "POST"]),
-                # Standard message mounting
                 Mount("/messages", app=handle_messages, methods=["POST"]),
             ]
         )
         
         uvicorn.run(app, host="0.0.0.0", port=port)
     else:
-        # Local dev remains on stdio
         mcp.run(transport="stdio")
+
 
 
 if __name__ == "__main__":
