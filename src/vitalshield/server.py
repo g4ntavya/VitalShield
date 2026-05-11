@@ -686,7 +686,7 @@ def main():
             routes=[
                 Route("/", endpoint=health_check, methods=["GET", "POST"]),
                 Route("/sse", endpoint=handle_sse, methods=["GET", "POST"]),
-                Mount("/messages", app=handle_messages, methods=["POST"]),
+                Mount("/messages", app=handle_messages),
             ]
         )
         
