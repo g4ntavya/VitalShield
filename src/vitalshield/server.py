@@ -700,45 +700,29 @@ def main():
     port = int(os.getenv("PORT", 8000))
 
     if os.getenv("PORT"):
-        log.info("Cloud environment detected, initializing ASGI SSE", port=port)
+        log.info("Cloud environment detected, initializing FastMCP HTTP app", port=port)
 
-        sse = SseServerTransport("/messages")
-
-        async def handle_sse(request: Request):
-            async with sse.connect_sse(request.scope, request.receive, request._send) as (
-                read_stream,
-                write_stream,
-            ):
-                await mcp._mcp_server.run(
-                    read_stream, write_stream, mcp._mcp_server.create_initialization_options()
-                )
-
-        async def handle_messages(request: Request):
-            await sse.handle_post_message(request.scope, request.receive, request._send)
+        # Get the battle-tested, built-in Starlette app from FastMCP
+        # This natively handles SSE (GET) and Messages (POST) on the /mcp endpoint
+        app = mcp.http_app()
 
         async def health_check(request: Request):
             return JSONResponse(
                 {
                     "status": "VitalShield Active",
-                    "mcp_sse_endpoint": "/sse",
-                    "mcp_messages_endpoint": "/messages",
+                    "mcp_endpoint": "/mcp",
+                    "docs": "Use the /mcp endpoint for the SSE connection."
                 }
             )
 
-        from starlette.middleware import Middleware
         from starlette.middleware.cors import CORSMiddleware
 
-        app = Starlette(
-            routes=[
-                Route("/", endpoint=health_check, methods=["GET", "POST"]),
-                Route("/sse", endpoint=handle_sse, methods=["GET", "POST"]),
-                Route("/messages", endpoint=handle_messages, methods=["POST"]),
-            ],
-            middleware=[
-                Middleware(
-                    CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"]
-                )
-            ],
+        # Add the health check to the root for Railway
+        app.add_route("/", health_check, methods=["GET", "POST"])
+        
+        # Inject CORS to prevent 'Unexpected Error' in web-based MCP clients
+        app.add_middleware(
+            CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"]
         )
 
         uvicorn.run(app, host="0.0.0.0", port=port)
