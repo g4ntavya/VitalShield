@@ -652,24 +652,47 @@ async def subscribe_vitals(
 # ── Entry point ────────────────────────────────────────────────────────────────
 
 def main():
-    """Run VitalShield MCP server."""
+    """Run VitalShield MCP server with cloud-ready health checks."""
     import os
     import uvicorn
     from starlette.applications import Starlette
     from starlette.responses import JSONResponse
-    from starlette.routing import Route
+    from starlette.routing import Route, Mount
+    from mcp.server.sse import SseServerTransport
 
     port = int(os.getenv("PORT", 8000))
     
-    # Check if we are running in a cloud environment (Railway/Prompt Opinion)
-    # If PORT is set, we use SSE as it's required for web-based MCP platforms.
     if os.getenv("PORT"):
-        log.info("Cloud environment detected, starting SSE server", port=port)
-        # FastMCP.run(transport="sse") is good, but for some platforms 
-        # we need to be explicit about the host and port binding.
-        mcp.run(transport="sse", host="0.0.0.0", port=port)
+        log.info("Cloud environment detected, initializing SSE with health check", port=port)
+        
+        # Initialize the SSE transport
+        sse = SseServerTransport("/messages")
+
+        async def handle_sse(request):
+            async with sse.connect_sse(request.scope, request.receive, request._send) as (read_stream, write_stream):
+                await mcp.server.run(read_stream, write_stream, mcp.server.create_initialization_options())
+
+        async def handle_messages(request):
+            await sse.handle_post_message(request.scope, request.receive, request._send)
+
+        def health_check(request):
+            return JSONResponse({
+                "status": "VitalShield Active",
+                "version": "1.0.0",
+                "mcp_endpoint": "/sse"
+            })
+
+        app = Starlette(
+            routes=[
+                Route("/", endpoint=health_check),
+                Route("/sse", endpoint=handle_sse),
+                Mount("/messages", app=handle_messages),
+            ]
+        )
+        
+        uvicorn.run(app, host="0.0.0.0", port=port)
     else:
-        # Local dev defaults to stdio for Claude Desktop
+        # Local dev remains on stdio
         mcp.run(transport="stdio")
 
 
