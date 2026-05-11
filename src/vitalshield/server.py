@@ -654,10 +654,23 @@ async def subscribe_vitals(
 def main():
     """Run VitalShield MCP server."""
     import os
+    import uvicorn
+    from starlette.applications import Starlette
+    from starlette.responses import JSONResponse
+    from starlette.routing import Route
+
     port = int(os.getenv("PORT", 8000))
-    # If PORT is set, we are likely in a cloud environment (Railway/Render)
-    # Prompt Opinion requires SSE for web-based MCP clients.
-    mcp.run(transport="sse", host="0.0.0.0", port=port)
+    
+    # Check if we are running in a cloud environment (Railway/Prompt Opinion)
+    # If PORT is set, we use SSE as it's required for web-based MCP platforms.
+    if os.getenv("PORT"):
+        log.info("Cloud environment detected, starting SSE server", port=port)
+        # FastMCP.run(transport="sse") is good, but for some platforms 
+        # we need to be explicit about the host and port binding.
+        mcp.run(transport="sse", host="0.0.0.0", port=port)
+    else:
+        # Local dev defaults to stdio for Claude Desktop
+        mcp.run(transport="stdio")
 
 
 if __name__ == "__main__":
