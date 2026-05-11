@@ -699,6 +699,9 @@ def main():
 
     port = int(os.getenv("PORT", 8000))
 
+    # Declare SHARP extension support for Prompt Opinion FHIR context
+    mcp._mcp_server.experimental_capabilities = {"sharp:fhir": {"version": "1.0.0"}}
+
     if os.getenv("PORT"):
         log.info("Cloud environment detected, initializing FastMCP HTTP app", port=port)
 
