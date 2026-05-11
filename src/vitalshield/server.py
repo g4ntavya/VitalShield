@@ -652,7 +652,7 @@ async def subscribe_vitals(
 # ── Entry point ────────────────────────────────────────────────────────────────
 
 def main():
-    """Run VitalShield MCP server with cloud-ready health checks."""
+    """Run VitalShield MCP server with bulletproof cloud routing."""
     import os
     import uvicorn
     from starlette.applications import Starlette
@@ -663,9 +663,9 @@ def main():
     port = int(os.getenv("PORT", 8000))
     
     if os.getenv("PORT"):
-        log.info("Cloud environment detected, initializing SSE with health check", port=port)
+        log.info("Cloud environment detected, initializing robust SSE", port=port)
         
-        # Initialize the SSE transport
+        # Initialize the SSE transport with the explicit message endpoint
         sse = SseServerTransport("/messages")
 
         async def handle_sse(request):
@@ -675,18 +675,24 @@ def main():
         async def handle_messages(request):
             await sse.handle_post_message(request.scope, request.receive, request._send)
 
-        def health_check(request):
+        async def root_handler(request):
+            # If it's a POST, it might be a platform health check or message
+            if request.method == "POST":
+                return JSONResponse({"status": "Active", "message": "POST received"}, status_code=200)
             return JSONResponse({
                 "status": "VitalShield Active",
-                "version": "1.0.0",
-                "mcp_endpoint": "/sse"
+                "mcp_sse_endpoint": "/sse",
+                "mcp_messages_endpoint": "/messages"
             })
 
         app = Starlette(
             routes=[
-                Route("/", endpoint=health_check),
-                Route("/sse", endpoint=handle_sse),
-                Mount("/messages", app=handle_messages),
+                # Handle root with both GET and POST for maximum compatibility
+                Route("/", endpoint=root_handler, methods=["GET", "POST"]),
+                # Handle /sse for both to prevent 405s during handshake
+                Route("/sse", endpoint=handle_sse, methods=["GET", "POST"]),
+                # Standard message mounting
+                Mount("/messages", app=handle_messages, methods=["POST"]),
             ]
         )
         
