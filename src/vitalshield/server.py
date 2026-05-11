@@ -699,8 +699,33 @@ def main():
 
     port = int(os.getenv("PORT", 8000))
 
-    # Declare SHARP extension support for Prompt Opinion FHIR context
-    mcp._mcp_server.experimental_capabilities = {"sharp:fhir": {"version": "1.0.0"}}
+    # --- Prompt Opinion FHIR Context Patch ---
+    # The standard MCP SDK does not natively support top-level 'extensions' fields.
+    # We intercept the initialization options creation to manually inject the exact 
+    # JSON structure Prompt Opinion expects for its FHIR integration.
+    original_create = mcp._mcp_server.create_initialization_options
+    
+    def prompt_opinion_initialization_options():
+        from mcp.types import ServerCapabilities
+        opts = original_create()
+        
+        # Dump the current capabilities and append the Prompt Opinion extension
+        caps_dict = opts.capabilities.model_dump(exclude_none=True)
+        caps_dict["extensions"] = {
+            "ai.promptopinion/fhir-context": {
+                "scopes": [
+                    {"name": "patient/Patient.rs", "required": True},
+                    {"name": "patient/Observation.rs", "required": True},
+                    {"name": "patient/Condition.rs"},
+                    {"name": "offline_access"}
+                ]
+            }
+        }
+        opts.capabilities = ServerCapabilities(**caps_dict)
+        return opts
+
+    mcp._mcp_server.create_initialization_options = prompt_opinion_initialization_options
+    # -----------------------------------------
 
     if os.getenv("PORT"):
         log.info("Cloud environment detected, initializing FastMCP HTTP app", port=port)
