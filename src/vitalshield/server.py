@@ -657,7 +657,8 @@ def main():
     import uvicorn
     from starlette.applications import Starlette
     from starlette.responses import JSONResponse
-    from starlette.routing import Route, Mount
+    from starlette.routing import Route
+    from starlette.requests import Request
     from mcp.server.sse import SseServerTransport
 
     port = int(os.getenv("PORT", 8000))
@@ -667,26 +668,25 @@ def main():
         
         sse = SseServerTransport("/messages")
 
-        async def handle_sse(scope, receive, send):
-            async with sse.connect_sse(scope, receive, send) as (read_stream, write_stream):
-                await mcp.server.run(read_stream, write_stream, mcp.server.create_initialization_options())
+        async def handle_sse(request: Request):
+            async with sse.connect_sse(request.scope, request.receive, request._send) as (read_stream, write_stream):
+                await mcp._mcp_server.run(read_stream, write_stream, mcp._mcp_server.create_initialization_options())
 
-        async def handle_messages(scope, receive, send):
-            await sse.handle_post_message(scope, receive, send)
+        async def handle_messages(request: Request):
+            await sse.handle_post_message(request.scope, request.receive, request._send)
 
-        async def health_check(scope, receive, send):
-            response = JSONResponse({
+        async def health_check(request: Request):
+            return JSONResponse({
                 "status": "VitalShield Active",
                 "mcp_sse_endpoint": "/sse",
                 "mcp_messages_endpoint": "/messages"
             })
-            await response(scope, receive, send)
 
         app = Starlette(
             routes=[
                 Route("/", endpoint=health_check, methods=["GET", "POST"]),
                 Route("/sse", endpoint=handle_sse, methods=["GET", "POST"]),
-                Mount("/messages", app=handle_messages),
+                Route("/messages", endpoint=handle_messages, methods=["POST"]),
             ]
         )
         
